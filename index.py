@@ -1,146 +1,111 @@
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.ensemble import GradientBoostingClassifier
-import matplotlib.pyplot as plt
+# Import necessary libraries
+import MetaTrader5 as mt5
+import time
 import logging
+import datetime
 
-# Set up logging
-logging.basicConfig(filename='forex_trading.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Connect to MetaTrader platform
+if not mt5.initialize():
+    logging.error("initialize() failed, error code =", mt5.last_error())
+    quit()
 
-def train_model(X, y):
-    """
-    Train a Gradient Boosting Classifier model with hyperparameter tuning.
+# Define the trading bot class
+class ForexTradingBot:
+    def _init_(self, symbol, timeframe, fast_ma_period, slow_ma_period, max_risk_percent, take_profit_ratio, trailing_stop_ratio, is_demo=True):
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.fast_ma_period = fast_ma_period
+        self.slow_ma_period = slow_ma_period
+        self.max_risk_percent = max_risk_percent
+        self.take_profit_ratio = take_profit_ratio
+        self.trailing_stop_ratio = trailing_stop_ratio
+        self.is_demo = is_demo
+        self.last_trade_time = 0
 
-    Parameters:
-    X (DataFrame): Features.
-    y (Series): Target variable.
+    def get_market_data(self):
+        # Implement logic to fetch market data for the specified symbol and timeframe
+        pass
 
-    Returns:
-    best_model: Best trained model.
-    """
-    try:
-        model = GradientBoostingClassifier(random_state=42)
-        param_grid = {
-            'n_estimators': [50, 100, 200],
-            'learning_rate': [0.01, 0.1, 0.5]
+    def calculate_moving_averages(self, market_data):
+        # Implement logic to calculate fast and slow moving averages
+        pass
+
+    def calculate_position_size(self, stop_loss):
+        # Implement logic to calculate position size based on risk percentage
+        pass
+
+    def is_within_trading_hours(self):
+        # Implement logic to check if the current time is within trading hours
+        pass
+
+    def execute_trade(self, action, lot_size, stop_loss, take_profit):
+        # Implement logic to execute a trade
+        order_type = mt5.ORDER_BUY if action == "BUY" else mt5.ORDER_SELL
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": lot_size,
+            "type": order_type,
+            "price": mt5.symbol_info_tick(self.symbol).bid if action == "BUY" else mt5.symbol_info_tick(self.symbol).ask,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "deviation": 10,
+            "magic": 234000,  # Magic number for the order
+            "comment": "Trading Bot Order"
         }
-        grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=3)
-        grid_search.fit(X, y)
-        best_model = grid_search.best_estimator_
-        return best_model
-    except Exception as e:
-        logging.error(f"Error occurred during model training: {e}")
-        raise RuntimeError("Error occurred during model training")
 
-def calculate_rsi(data, window=14):
-    """
-    Calculate the Relative Strength Index (RSI) using pandas.
-
-    Parameters:
-    data (DataFrame): Historical data including the 'close' price.
-    window (int): Window size for RSI calculation (default is 14).
-
-    Returns:
-    rsi (Series): Relative Strength Index.
-    """
-    delta = data['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def generate_signal(model, current_data, signal_duration):
-    """
-    Generate a trading signal based on the current data.
-
-    Parameters:
-    model: Trained model for prediction.
-    current_data (DataFrame): Current data point for prediction.
-    signal_duration (int): Duration of the signal in minutes.
-
-    Returns:
-    prediction: Predicted trading signal.
-    signal_duration: Duration of the signal.
-    """
-    try:
-        # Calculate RSI
-        current_data['RSI'] = calculate_rsi(current_data)
-
-        # Make prediction
-        X_real_time = current_data[['RSI', 'other_features']].values.reshape(1, -1)
-        prediction = model.predict(X_real_time)
-
-        return prediction, signal_duration
-    except Exception as e:
-        logging.error(f"Error occurred during signal generation: {e}")
-        raise RuntimeError("Error occurred during signal generation")
-
-def plot_data_with_expected_movement(data, next_trade_signal, signal_duration):
-    """
-    Plot historical data with the next trade signal and expected movement direction.
-
-    Parameters:
-    data (DataFrame): Historical data.
-    next_trade_signal (int): Next trade signal.
-    signal_duration (int): Duration of the signal in minutes.
-    """
-    try:
-        plt.figure(figsize=(10, 6))
-        plt.plot(data['timestamp'], data['close'], color='blue', label='Close Price')
-
-        # Plot arrow
-        if next_trade_signal == 1:
-            arrow_color = 'green'
-            arrow_direction = 'up'
-        elif next_trade_signal == -1:
-            arrow_color = 'red'
-            arrow_direction = 'down'
+        if self.is_demo:
+            result = mt5.order_send(request)
         else:
-            arrow_color = 'black'
-            arrow_direction = 'up'
+            result = mt5.order_send(request, timeout=10, request_type=mt5.ORDER_REQUEST_ADD, response_type=mt5.ORDER_RESPONSE_RETURN)
 
-        plt.annotate(f'{signal_duration} min', xy=(0.5, 0.5), xytext=(0.5, 0.6),
-                     arrowprops=dict(facecolor='black', shrink=0.05),
-                     fontsize=12, ha='center')
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logging.warning(f"Trade execution failed: {result.comment}")
 
-        plt.xlabel('Timestamp')
-        plt.ylabel('Price')
-        plt.title('Forex Trading Signals with Expected Movement')
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-    except Exception as e:
-        logging.error(f"Error occurred during visualization: {e}")
-        raise RuntimeError("Error occurred during visualization")
+    def adjust_stop_loss(self, current_price, stop_loss):
+        # Implement logic to dynamically adjust stop-loss
+        new_stop_loss = max(current_price * (1 - self.trailing_stop_ratio), stop_loss)  # Trailing stop
+        return new_stop_loss
 
-def main():
-    try:
-        # Load and preprocess data
-        # (You'll need to replace this with your data loading and preprocessing code)
-        data = pd.read_csv("forex_data.csv")
-        X = data.drop(columns=["label"])
-        y = data["label"]
-        X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
+    def monitor_trades(self):
+        # Implement logic to monitor and manage open trades
+        pass
 
-        # Train model
-        model = train_model(X_train, y_train)
+    def main(self):
+        while True:
+            try:
+                if self.is_within_trading_hours():
+                    market_data = self.get_market_data()
+                    fast_ma, slow_ma = self.calculate_moving_averages(market_data)
 
-        # Simulate real-time data
-        # Connect to live data feed and continuously receive real-time data
-        # For demonstration purposes, let's assume we have a single data point
-        current_data = {'timestamp': '2024-02-04 12:00:00', 'close': 1.2345, 'other_features': [0.1, 0.5, 0.2]}  # Add real features based on your data
+                    if fast_ma > slow_ma:
+                        if time.time() - self.last_trade_time >= 3600:  # Trade every 1 hour
+                            entry_price = market_data[-1]['close']
+                            initial_stop_loss = entry_price * (1 - self.max_risk_percent)  # Max risk percentage
+                            take_profit = entry_price * (1 + self.take_profit_ratio)
+                            lot_size = self.calculate_position_size(initial_stop_loss)
 
-        # Generate signal for the next trade
-        next_trade_signal, signal_duration = generate_signal(model, current_data, 15)  # Signal duration: 15 minutes
+                            # Execute trade with confidence
+                            self.execute_trade("BUY", lot_size, initial_stop_loss, take_profit)
 
-        # Plot data with expected movement direction
-        plot_data_with_expected_movement(data, next_trade_signal, signal_duration)
+                            self.last_trade_time = time.time()
+                else:
+                    logging.info("Outside of trading hours. Waiting...")
 
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
-        print("An unexpected error occurred. Please check the log file for details.")
+                self.monitor_trades()
+                time.sleep(60)  # Sleep for 60 seconds before the next iteration
+            except Exception as e:
+                logging.error(f"An error occurred: {e}")
+                # Implement error handling or alert mechanism
 
-if __name__ == "_main_":
-    main()
+# Input your demo account details
+your_login = "5022393002"  # Replace with your demo account login
+your_password = "U-Sy0jAs"  # Replace with your demo account password
+
+# Instantiate the bot with desired parameters
+symbol = "USDJPY"  # Change this to the desired symbol
+timeframe = mt5.TIMEFRAME_M1  # Change this to the desired timeframe
+fast_ma_period = 10  # Change this to the desired fast MA period
+slow_ma_period = 50  # Change this to the desired slow MA period
+max_risk_percent = 0.15  # Change this to the desired maximum risk percentage
+take_profit_ratio = 0.01  # Change this to the
