@@ -1,147 +1,146 @@
-import MetaTrader5 as mt5
-import pandas as pd
 import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import GradientBoostingClassifier
+import matplotlib.pyplot as plt
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging
+logging.basicConfig(filename='forex_trading.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Define connection to MetaTrader 5
-def connect_to_mt5():
-    """Connect to MetaTrader 5."""
-    if not mt5.initialize():
-        logging.error("Failed to connect to MetaTrader 5.")
-        return False
-    return True
+def train_model(X, y):
+    """
+    Train a Gradient Boosting Classifier model with hyperparameter tuning.
 
-# Check account balance
-def check_account_balance():
-    """Check account balance."""
-    account_info = mt5.account_info()
-    balance = account_info.balance
-    if balance < 30:
-        logging.error("Insufficient balance for trading.")
-        mt5.shutdown()
-        exit()
-    return balance
+    Parameters:
+    X (DataFrame): Features.
+    y (Series): Target variable.
 
-# Retrieve historical prices
-def retrieve_historical_prices(symbol, timeframe, num_periods):
-    """Retrieve historical prices."""
-    history = mt5.copy_rates_from_pos(symbol, timeframe, 0, num_periods)
-    prices = pd.DataFrame(history)
-    return prices
+    Returns:
+    best_model: Best trained model.
+    """
+    try:
+        model = GradientBoostingClassifier(random_state=42)
+        param_grid = {
+            'n_estimators': [50, 100, 200],
+            'learning_rate': [0.01, 0.1, 0.5]
+        }
+        grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=3)
+        grid_search.fit(X, y)
+        best_model = grid_search.best_estimator_
+        return best_model
+    except Exception as e:
+        logging.error(f"Error occurred during model training: {e}")
+        raise RuntimeError("Error occurred during model training")
 
-# Calculate ATR (Average True Range) for volatility-based position sizing
-def calculate_atr(prices, period=14):
-    """Calculate Average True Range (ATR)."""
-    high_low_range = prices['high'] - prices['low']
-    high_close_range = abs(prices['high'] - prices['close'].shift())
-    low_close_range = abs(prices['low'] - prices['close'].shift())
-    true_range = pd.concat([high_low_range, high_close_range, low_close_range], axis=1).max(axis=1)
-    atr = true_range.rolling(period).mean().iloc[-1]
-    return atr
+def calculate_rsi(data, window=14):
+    """
+    Calculate the Relative Strength Index (RSI) using pandas.
 
-# Open a buy order
-def open_buy_order(symbol, lot_size, stop_loss, take_profit):
-    """Open a buy order."""
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": lot_size,
-        "type": mt5.ORDER_TYPE_BUY,
-        "price": mt5.symbol_info_tick(symbol).bid,
-        "sl": stop_loss,
-        "tp": take_profit,
-        "magic": 123456,
-        "comment": "Python EA Buy",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
-    }
+    Parameters:
+    data (DataFrame): Historical data including the 'close' price.
+    window (int): Window size for RSI calculation (default is 14).
 
-    result = mt5.order_send(request)
-    if result.retcode == mt5.TRADE_RETCODE_DONE:
-        logging.info("Buy order executed successfully.")
-        return result.order
-    else:
-        logging.error(f"Order send failed: {result.comment}")
-        return None
+    Returns:
+    rsi (Series): Relative Strength Index.
+    """
+    delta = data['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-# Modify an existing order
-def modify_order(order, stop_loss, take_profit):
-    """Modify an existing order."""
-    result = mt5.order_modify(order, sl=stop_loss, tp=take_profit)
-    if result.retcode == mt5.TRADE_RETCODE_DONE:
-        logging.info("Order modified successfully.")
-    else:
-        logging.error(f"Order modification failed: {result.comment}")
+def generate_signal(model, current_data, signal_duration):
+    """
+    Generate a trading signal based on the current data.
 
-# Backtest the trading strategy
-def backtest_strategy(symbol, timeframe, num_periods):
-    """Backtest the trading strategy."""
-    # Retrieve historical prices
-    prices = retrieve_historical_prices(symbol, timeframe, num_periods)
+    Parameters:
+    model: Trained model for prediction.
+    current_data (DataFrame): Current data point for prediction.
+    signal_duration (int): Duration of the signal in minutes.
 
-    # Calculate ATR (Average True Range) for volatility-based position sizing
-    atr = calculate_atr(prices)
+    Returns:
+    prediction: Predicted trading signal.
+    signal_duration: Duration of the signal.
+    """
+    try:
+        # Calculate RSI
+        current_data['RSI'] = calculate_rsi(current_data)
 
-    # Example: Calculate position size based on balance and ATR
-    # For backtesting, assume a fixed position size
-    position_size = 0.1  # Fixed position size of 0.1 lots
+        # Make prediction
+        X_real_time = current_data[['RSI', 'other_features']].values.reshape(1, -1)
+        prediction = model.predict(X_real_time)
 
-    # Example: Simulate executing the strategy on historical data
-    num_trades = 0
-    total_profit = 0.0
-    for index, row in prices.iterrows():
-        # Simulate trade execution based on trade signal conditions
-        if row['rsi'] > 70 and row['macd'] > 0:
-            # Example: Calculate stop loss and take profit levels
-            stop_loss = row['close'] - 2 * atr  # Set stop loss at 2x ATR below entry
-            take_profit = row['close'] + 3 * atr  # Set take profit at 3x ATR above entry
-            
-            # Execute buy order with fixed position size
-            order = open_buy_order(symbol, position_size, stop_loss, take_profit)
-            if order:
-                num_trades += 1
-                profit = (take_profit - row['close']) * position_size  # Calculate profit/loss
-                total_profit += profit
+        return prediction, signal_duration
+    except Exception as e:
+        logging.error(f"Error occurred during signal generation: {e}")
+        raise RuntimeError("Error occurred during signal generation")
 
-    # Calculate performance metrics
-    win_rate = num_trades / len(prices)
-    average_profit_per_trade = total_profit / num_trades if num_trades > 0 else 0.0
+def plot_data_with_expected_movement(data, next_trade_signal, signal_duration):
+    """
+    Plot historical data with the next trade signal and expected movement direction.
 
-    # Print performance metrics
-    logging.info(f"Backtest Results for {symbol}:")
-    logging.info(f"Number of Trades: {num_trades}")
-    logging.info(f"Win Rate: {win_rate:.2%}")
-    logging.info(f"Average Profit per Trade: {average_profit_per_trade:.2f}")
+    Parameters:
+    data (DataFrame): Historical data.
+    next_trade_signal (int): Next trade signal.
+    signal_duration (int): Duration of the signal in minutes.
+    """
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(data['timestamp'], data['close'], color='blue', label='Close Price')
 
-# Main function
-def ForexStrategyOptimizer():
-    # Connect to MetaTrader 5
-    if not connect_to_mt5():
-        exit()
+        # Plot arrow
+        if next_trade_signal == 1:
+            arrow_color = 'green'
+            arrow_direction = 'up'
+        elif next_trade_signal == -1:
+            arrow_color = 'red'
+            arrow_direction = 'down'
+        else:
+            arrow_color = 'black'
+            arrow_direction = 'up'
 
-    # Define timeframes and number of periods for historical data
-    timeframe = mt5.TIMEFRAME_M15
-    num_periods = 100
+        plt.annotate(f'{signal_duration} min', xy=(0.5, 0.5), xytext=(0.5, 0.6),
+                     arrowprops=dict(facecolor='black', shrink=0.05),
+                     fontsize=12, ha='center')
 
-    # Backtest the trading strategy for each currency pair
-    currency_pairs = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XAUUSD"]
-    for symbol in currency_pairs:
-        backtest_strategy(symbol, timeframe, num_periods)
+        plt.xlabel('Timestamp')
+        plt.ylabel('Price')
+        plt.title('Forex Trading Signals with Expected Movement')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+    except Exception as e:
+        logging.error(f"Error occurred during visualization: {e}")
+        raise RuntimeError("Error occurred during visualization")
 
-    # Disconnect from MetaTrader 5
-    mt5.shutdown()
+def main():
+    try:
+        # Load and preprocess data
+        # (You'll need to replace this with your data loading and preprocessing code)
+        data = pd.read_csv("forex_data.csv")
+        X = data.drop(columns=["label"])
+        y = data["label"]
+        X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Advertisement
-print("\nUnlock Your Trading Potential with Our Advanced Forex Trading Robot!\n")
-print("Are you ready to take your forex trading to the next level? Introducing our cutting-edge automated trading robot powered by advanced algorithms and state-of-the-art technology.\n")
-print("Key Features:\n")
-print("1. Intelligent Trade Signal Analysis")
-print("2. Dynamic Position Sizing")
-print("3. Advanced Order Management\n")
-print("Don't miss out on this opportunity to optimize your trading strategy and maximize your profits. Get started today!")
+        # Train model
+        model = train_model(X_train, y_train)
 
-if __name__ == "__main__":
-    ForexStrategyOptimizer()
+        # Simulate real-time data
+        # Connect to live data feed and continuously receive real-time data
+        # For demonstration purposes, let's assume we have a single data point
+        current_data = {'timestamp': '2024-02-04 12:00:00', 'close': 1.2345, 'other_features': [0.1, 0.5, 0.2]}  # Add real features based on your data
+
+        # Generate signal for the next trade
+        next_trade_signal, signal_duration = generate_signal(model, current_data, 15)  # Signal duration: 15 minutes
+
+        # Plot data with expected movement direction
+        plot_data_with_expected_movement(data, next_trade_signal, signal_duration)
+
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        print("An unexpected error occurred. Please check the log file for details.")
+
+if __name__ == "_main_":
+    main()
