@@ -1,4 +1,4 @@
-# Import necessary libraries
+# Import required
 import MetaTrader5 as mt5
 import time
 import logging
